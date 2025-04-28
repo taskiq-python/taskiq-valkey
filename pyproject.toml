@@ -21,24 +21,37 @@ classifiers = [
     "Topic :: System :: Networking",
     "Development Status :: 3 - Alpha",
 ]
-keywords = ["taskiq", "tasks", "distributed", "async"]
+keywords = [
+    "taskiq",
+    "tasks",
+    "distributed",
+    "async",
+    "valkey",
+    "result_backend",
+]
 packages = [{ include = "taskiq_valkey" }]
 
 [tool.poetry.dependencies]
 python = "^3.9"
-taskiq = "^0"
+taskiq = ">=0.11.12,<1"
+valkey = "^6.1.0"
 
 [tool.poetry.group.dev.dependencies]
+# test utils
 pytest = "^8"
+pytest-cov = "^6"
+pytest-asyncio = "^0.26.0"
+pytest-xdist = { version = "^3", extras = ["psutil"] }
+coverage = "^7"
+mock = "^5"
+freezegun = "^1.5.1"
+# type checks
 mypy = "^1"
 pre-commit = "^4"
-coverage = "^7"
-pytest-cov = "^6"
-mock = "^5"
-anyio = "^4"
-pytest-xdist = { version = "^3", extras = ["psutil"] }
 types-mock = "^5"
+# linters and formatters
 black = "^25"
+ruff = "^0"
 
 [tool.mypy]
 strict = true
@@ -120,3 +133,26 @@ allow-magic-value-types = ["int", "str", "float"]
 
 [tool.ruff.lint.flake8-bugbear]
 extend-immutable-calls = ["taskiq_dependencies.Depends", "taskiq.TaskiqDepends"]
+
+
+[tool.pytest.ini_options]
+pythonpath = [
+  "."
+]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.coverage.report]
+exclude_lines = [
+    "# pragma: no cover",
+    "def __repr__",
+    "def __str__",
+    "def __unicode__",
+]
+show_missing = true
+skip_empty = true
+omit = [
+    "*/__init__.py",
+    "venv/*",
+    "tests/*"
+]

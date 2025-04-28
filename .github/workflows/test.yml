@@ -1,6 +1,11 @@
-name: Testing package
+name: Testing taskiq-valkey
 
-on: push
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
 
 jobs:
   lint:
@@ -8,8 +13,8 @@ jobs:
       matrix:
         cmd:
           - black
-          - mypy
           - ruff
+          - mypy
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -18,40 +23,40 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: "3.9"
+          python-version: "3.11"
           cache: "poetry"
       - name: Install deps
         run: poetry install
       - name: Run lint check
         run: poetry run pre-commit run -a ${{ matrix.cmd }}
   pytest:
-    permissions:
-      checks: write
-      pull-requests: write
-      contents: write
     strategy:
       matrix:
         py_version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
-        os: [ubuntu-latest, windows-latest]
-    runs-on: "${{ matrix.os }}"
+    runs-on: "ubuntu-latest"
     steps:
       - uses: actions/checkout@v4
-      - name: Install poetry
-        run: pipx install poetry
+      - name: Set up Valkey instance and Valkey cluster
+        run: docker compose up -d
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v2
         with:
           python-version: "${{ matrix.py_version }}"
-          cache: "poetry"
+      - name: Update pip
+        run: python -m pip install -U pip
+      - name: Install poetry
+        run: python -m pip install poetry
       - name: Install deps
         run: poetry install
+        env:
+          POETRY_VIRTUALENVS_CREATE: false
       - name: Run pytest check
         run: poetry run pytest -vv -n auto --cov="taskiq_valkey" .
       - name: Generate report
         run: poetry run coverage xml
       - name: Upload coverage reports to Codecov with GitHub Action
         uses: codecov/codecov-action@v3
-        if: matrix.os == 'ubuntu-latest' && matrix.py_version == '3.11'
+        if: matrix.py_version == '3.9'
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false

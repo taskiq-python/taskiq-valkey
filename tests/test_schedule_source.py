@@ -1,0 +1,361 @@
+import asyncio
+import datetime as dt
+import uuid
+from typing import List, Tuple
+
+from taskiq import ScheduledTask
+
+from taskiq_valkey import (
+    ListValkeyScheduleSource,
+    ValkeyClusterScheduleSource,
+    ValkeySentinelScheduleSource,
+)
+
+
+async def test_set_schedule(valkey_url: str) -> None:
+    prefix = uuid.uuid4().hex
+    source = ListValkeyScheduleSource(valkey_url, prefix=prefix)
+    schedule = ScheduledTask(
+        task_name="test_task",
+        labels={},
+        args=[],
+        kwargs={},
+        cron="* * * * *",
+    )
+    await source.add_schedule(schedule)
+    schedules = await source.get_schedules()
+    assert schedules == [schedule]
+    await source.shutdown()
+
+
+async def test_delete_schedule(valkey_url: str) -> None:
+    prefix = uuid.uuid4().hex
+    source = ListValkeyScheduleSource(valkey_url, prefix=prefix)
+    schedule = ScheduledTask(
+        task_name="test_task",
+        labels={},
+        args=[],
+        kwargs={},
+        cron="* * * * *",
+    )
+    await source.add_schedule(schedule)
+    schedules = await source.get_schedules()
+    assert schedules == [schedule]
+    await source.delete_schedule(schedule.schedule_id)
+    schedules = await source.get_schedules()
+    # Schedules are empty.
+    assert not schedules
+    await source.shutdown()
+
+
+async def test_post_run_cron(valkey_url: str) -> None:
+    prefix = uuid.uuid4().hex
+    source = ListValkeyScheduleSource(valkey_url, prefix=prefix)
+    schedule = ScheduledTask(
+        task_name="test_task",
+        labels={},
+        args=[],
+        kwargs={},
+        cron="* * * * *",
+    )
+    await source.add_schedule(schedule)
+    assert await source.get_schedules() == [schedule]
+    await source.post_send(schedule)
+    assert await source.get_schedules() == [schedule]
+    await source.shutdown()
+
+
+async def test_post_run_time(valkey_url: str) -> None:
+    prefix = uuid.uuid4().hex
+    source = ListValkeyScheduleSource(valkey_url, prefix=prefix)
+    schedule = ScheduledTask(
+        task_name="test_task",
+        labels={},
+        args=[],
+        kwargs={},
+        time=dt.datetime(2000, 1, 1),
+    )
+    await source.add_schedule(schedule)
+    assert await source.get_schedules() == [schedule]
+    await source.post_send(schedule)
+    assert await source.get_schedules() == []
+    await source.shutdown()
+
+
+async def test_buffer(valkey_url: str) -> None:
+    prefix = uuid.uuid4().hex
+    source = ListValkeyScheduleSource(valkey_url, prefix=prefix, buffer_size=1)
+    schedule1 = ScheduledTask(
+        task_name="test_task1",
+        labels={},
+        args=[],
+        kwargs={},
+        cron="* * * * *",
+    )
+    schedule2 = ScheduledTask(
+        task_name="test_task2",
+        labels={},
+        args=[],
+        kwargs={},
+        cron="* * * * *",
+    )
+    await source.add_schedule(schedule1)
+    await source.add_schedule(schedule2)
+    schedules = await source.get_schedules()
+    assert len(schedules) == 2
+    assert schedule1 in schedules
+    assert schedule2 in schedules
+    await source.shutdown()
+
+
+async def test_max_connections(valkey_url: str) -> None:
+    prefix = uuid.uuid4().hex
+    source = ListValkeyScheduleSource(
+        valkey_url,
+        prefix=prefix,
+        max_connection_pool_size=1,
+        timeout=3,
+    )
+    await asyncio.gather(*[source.get_schedules() for _ in range(10)])
+
+
+async def test_cluster_set_schedule(valkey_cluster_url: str) -> None:
+    prefix = uuid.uuid4().hex
+    source = ValkeyClusterScheduleSource(valkey_cluster_url, prefix=prefix)
+    schedule = ScheduledTask(
+        task_name="test_task",
+        labels={},
+        args=[],
+        kwargs={},
+        cron="* * * * *",
+    )
+    await source.add_schedule(schedule)
+    schedules = await source.get_schedules()
+    assert schedules == [schedule]
+    await source.shutdown()
+
+
+async def test_cluster_delete_schedule(valkey_cluster_url: str) -> None:
+    prefix = uuid.uuid4().hex
+    source = ValkeyClusterScheduleSource(valkey_cluster_url, prefix=prefix)
+    schedule = ScheduledTask(
+        task_name="test_task",
+        labels={},
+        args=[],
+        kwargs={},
+        cron="* * * * *",
+    )
+    await source.add_schedule(schedule)
+    schedules = await source.get_schedules()
+    assert schedules == [schedule]
+    await source.delete_schedule(schedule.schedule_id)
+    schedules = await source.get_schedules()
+    # Schedules are empty.
+    assert not schedules
+    await source.shutdown()
+
+
+async def test_cluster_post_run_cron(valkey_cluster_url: str) -> None:
+    prefix = uuid.uuid4().hex
+    source = ValkeyClusterScheduleSource(valkey_cluster_url, prefix=prefix)
+    schedule = ScheduledTask(
+        task_name="test_task",
+        labels={},
+        args=[],
+        kwargs={},
+        cron="* * * * *",
+    )
+    await source.add_schedule(schedule)
+    assert await source.get_schedules() == [schedule]
+    await source.post_send(schedule)
+    assert await source.get_schedules() == [schedule]
+    await source.shutdown()
+
+
+async def test_cluster_post_run_time(valkey_cluster_url: str) -> None:
+    prefix = uuid.uuid4().hex
+    source = ValkeyClusterScheduleSource(valkey_cluster_url, prefix=prefix)
+    schedule = ScheduledTask(
+        task_name="test_task",
+        labels={},
+        args=[],
+        kwargs={},
+        time=dt.datetime(2000, 1, 1),
+    )
+    await source.add_schedule(schedule)
+    assert await source.get_schedules() == [schedule]
+    await source.post_send(schedule)
+    assert await source.get_schedules() == []
+    await source.shutdown()
+
+
+async def test_cluster_get_schedules(valkey_cluster_url: str) -> None:
+    """
+    Test of a valkey cluster source.
+
+    This test checks that if the schedules are located on different nodes,
+    the source will still be able to get them all.
+
+    To simulate this we set a specific shard key for each schedule.
+    The shard keys are from this gist:
+
+    https://gist.githubusercontent.com/dvirsky/93f43277317f629bb06e858946416f7e/raw/b0438faf6f5a0020c12a0730f6cd6ac4bdc4b171/crc16_slottable.h
+
+    """
+    prefix = uuid.uuid4().hex
+    source = ValkeyClusterScheduleSource(valkey_cluster_url, prefix=prefix)
+    schedule1 = ScheduledTask(
+        schedule_id=r"id-{06S}",
+        task_name="test_task1",
+        labels={},
+        args=[],
+        kwargs={},
+        cron="* * * * *",
+    )
+    schedule2 = ScheduledTask(
+        schedule_id=r"id-{4Rs}",
+        task_name="test_task2",
+        labels={},
+        args=[],
+        kwargs={},
+        cron="* * * * *",
+    )
+    await source.add_schedule(schedule1)
+    await source.add_schedule(schedule2)
+    schedules = await source.get_schedules()
+    assert len(schedules) == 2
+    assert schedule1 in schedules
+    assert schedule2 in schedules
+    await source.shutdown()
+
+
+async def test_sentinel_set_schedule(
+    valkey_sentinels: List[Tuple[str, int]],
+    valkey_sentinel_master_name: str,
+) -> None:
+    prefix = uuid.uuid4().hex
+    source = ValkeySentinelScheduleSource(
+        sentinels=valkey_sentinels,
+        master_name=valkey_sentinel_master_name,
+        prefix=prefix,
+    )
+    schedule = ScheduledTask(
+        task_name="test_task",
+        labels={},
+        args=[],
+        kwargs={},
+        cron="* * * * *",
+    )
+    await source.add_schedule(schedule)
+    schedules = await source.get_schedules()
+    assert schedules == [schedule]
+    await source.shutdown()
+
+
+async def test_sentinel_delete_schedule(
+    valkey_sentinels: List[Tuple[str, int]],
+    valkey_sentinel_master_name: str,
+) -> None:
+    prefix = uuid.uuid4().hex
+    source = ValkeySentinelScheduleSource(
+        sentinels=valkey_sentinels,
+        master_name=valkey_sentinel_master_name,
+        prefix=prefix,
+    )
+    schedule = ScheduledTask(
+        task_name="test_task",
+        labels={},
+        args=[],
+        kwargs={},
+        cron="* * * * *",
+    )
+    await source.add_schedule(schedule)
+    schedules = await source.get_schedules()
+    assert schedules == [schedule]
+    await source.delete_schedule(schedule.schedule_id)
+    schedules = await source.get_schedules()
+    # Schedules are empty.
+    assert not schedules
+    await source.shutdown()
+
+
+async def test_sentinel_post_run_cron(
+    valkey_sentinels: List[Tuple[str, int]],
+    valkey_sentinel_master_name: str,
+) -> None:
+    prefix = uuid.uuid4().hex
+    source = ValkeySentinelScheduleSource(
+        sentinels=valkey_sentinels,
+        master_name=valkey_sentinel_master_name,
+        prefix=prefix,
+    )
+    schedule = ScheduledTask(
+        task_name="test_task",
+        labels={},
+        args=[],
+        kwargs={},
+        cron="* * * * *",
+    )
+    await source.add_schedule(schedule)
+    assert await source.get_schedules() == [schedule]
+    await source.post_send(schedule)
+    assert await source.get_schedules() == [schedule]
+    await source.shutdown()
+
+
+async def test_sentinel_post_run_time(
+    valkey_sentinels: List[Tuple[str, int]],
+    valkey_sentinel_master_name: str,
+) -> None:
+    prefix = uuid.uuid4().hex
+    source = ValkeySentinelScheduleSource(
+        sentinels=valkey_sentinels,
+        master_name=valkey_sentinel_master_name,
+        prefix=prefix,
+    )
+    schedule = ScheduledTask(
+        task_name="test_task",
+        labels={},
+        args=[],
+        kwargs={},
+        time=dt.datetime(2000, 1, 1),
+    )
+    await source.add_schedule(schedule)
+    assert await source.get_schedules() == [schedule]
+    await source.post_send(schedule)
+    assert await source.get_schedules() == []
+    await source.shutdown()
+
+
+async def test_sentinel_buffer(
+    valkey_sentinels: List[Tuple[str, int]],
+    valkey_sentinel_master_name: str,
+) -> None:
+    prefix = uuid.uuid4().hex
+    source = ValkeySentinelScheduleSource(
+        sentinels=valkey_sentinels,
+        master_name=valkey_sentinel_master_name,
+        prefix=prefix,
+        buffer_size=1,
+    )
+    schedule1 = ScheduledTask(
+        task_name="test_task1",
+        labels={},
+        args=[],
+        kwargs={},
+        cron="* * * * *",
+    )
+    schedule2 = ScheduledTask(
+        task_name="test_task2",
+        labels={},
+        args=[],
+        kwargs={},
+        cron="* * * * *",
+    )
+    await source.add_schedule(schedule1)
+    await source.add_schedule(schedule2)
+    schedules = await source.get_schedules()
+    assert len(schedules) == 2
+    assert schedule1 in schedules
+    assert schedule2 in schedules
+    await source.shutdown()

@@ -1,0 +1,85 @@
+services:
+  valkey:
+    image: bitnami/valkey:7.2.7
+    environment:
+      ALLOW_EMPTY_PASSWORD: "yes"
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    ports:
+      - 7000:6379
+  valkey-node-0: &valkey-node
+    image: docker.io/bitnami/valkey-cluster:7.2.7
+    environment:
+      ALLOW_EMPTY_PASSWORD: "yes"
+      VALKEY_NODES: "valkey-node-0 valkey-node-1 valkey-node-2 valkey-node-3 valkey-node-4 valkey-node-5"
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  valkey-node-1:
+    <<: *valkey-node
+
+  valkey-node-2:
+    <<: *valkey-node
+
+  valkey-node-3:
+    <<: *valkey-node
+
+  valkey-node-4:
+    <<: *valkey-node
+
+  valkey-node-5:
+    image: docker.io/bitnami/valkey-cluster:7.2.7
+    depends_on:
+      - valkey-node-0
+      - valkey-node-1
+      - valkey-node-2
+      - valkey-node-3
+      - valkey-node-4
+    environment:
+      ALLOW_EMPTY_PASSWORD: "yes"
+      VALKEY_NODES: "valkey-node-0 valkey-node-1 valkey-node-2 valkey-node-3 valkey-node-4 valkey-node-5"
+      VALKEY_CLUSTER_REPLICAS: 1
+      VALKEY_CLUSTER_CREATOR: "yes"
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    ports:
+      - 7001:6379
+
+  valkey-master:
+    image: bitnami/valkey:7.2.7
+    environment:
+      ALLOW_EMPTY_PASSWORD: "yes"
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  valkey-sentinel:
+    image: bitnami/valkey-sentinel:7.2.7
+    depends_on:
+      - valkey-master
+    environment:
+      ALLOW_EMPTY_PASSWORD: "yes"
+      VALKEY_MASTER_HOST: "valkey-master"
+    healthcheck:
+      test: ["CMD", "valkey-cli", "-p", "26379", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    ports:
+      - 7002:26379
