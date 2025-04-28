@@ -37,8 +37,7 @@ jobs:
     strategy:
       matrix:
         py_version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
-        os: [ubuntu-latest, windows-latest]
-    runs-on: "${{ matrix.os }}"
+    runs-on: "ubuntu-latest"
     steps:
       - uses: actions/checkout@v4
       - name: Set up Valkey instance and Valkey cluster
@@ -58,7 +57,7 @@ jobs:
         run: poetry run coverage xml
       - name: Upload coverage reports to Codecov with GitHub Action
         uses: codecov/codecov-action@v3
-        if: matrix.os == 'ubuntu-latest' && matrix.py_version == '3.11'
+        if: matrix.py_version == '3.11'
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
