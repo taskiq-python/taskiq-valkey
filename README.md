@@ -28,7 +28,6 @@ result_backend = ValkeyAsyncResultBackend(
 )
 
 # Or you can use PubSubBroker if you need broadcasting
-# Or ListQueueBroker if you don't want acknowledges
 broker = ValkeyStreamBroker(
     valkey_url="valkey://localhost:6379",
 ).with_result_backend(result_backend)
