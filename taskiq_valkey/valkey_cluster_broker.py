@@ -1,0 +1,188 @@
+import uuid
+from logging import getLogger
+from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, Optional
+
+from taskiq import AckableMessage
+from taskiq.abc.broker import AsyncBroker
+from taskiq.message import BrokerMessage
+from valkey.asyncio import ResponseError, ValkeyCluster
+
+logger = getLogger(__name__)
+
+
+class BaseValkeyClusterBroker(AsyncBroker):
+    """Base broker that works with Valkey Cluster."""
+
+    def __init__(
+        self,
+        url: str,
+        queue_name: str = "taskiq",
+        max_connection_pool_size: int = 2**31,
+        **connection_kwargs: Any,
+    ) -> None:
+        """
+        Constructs a new broker.
+
+        :param url: url to valkey.
+        :param queue_name: name for a list in valkey.
+        :param max_connection_pool_size: maximum number of connections in pool.
+        :param connection_kwargs: additional arguments for aio-valkey ConnectionPool.
+        """
+        super().__init__()
+
+        self.valkey: "ValkeyCluster[bytes]" = ValkeyCluster.from_url(  # type: ignore
+            url=url,
+            max_connections=max_connection_pool_size,
+            **connection_kwargs,
+        )
+
+        self.queue_name = queue_name
+
+    async def shutdown(self) -> None:
+        """Closes valkey connection pool."""
+        await self.valkey.aclose()
+        await super().shutdown()
+
+
+class ListQueueClusterBroker(BaseValkeyClusterBroker):
+    """Broker that works with Valkey Cluster and distributes tasks between workers."""
+
+    async def kick(self, message: BrokerMessage) -> None:
+        """
+        Put a message in a list.
+
+        This method appends a message to the list of all messages.
+
+        :param message: message to append.
+        """
+        await self.valkey.lpush(self.queue_name, message.message)  # type: ignore
+
+    async def listen(self) -> AsyncGenerator[bytes, None]:
+        """
+        Listen valkey queue for new messages.
+
+        This function listens to the queue
+        and yields new messages if they have BrokerMessage type.
+
+        :yields: broker messages.
+        """
+        valkey_brpop_data_position = 1
+        while True:
+            value = await self.valkey.brpop([self.queue_name])  # type: ignore
+            yield value[valkey_brpop_data_position]
+
+
+class ValkeyStreamClusterBroker(BaseValkeyClusterBroker):
+    """
+    Valkey broker that uses streams for task distribution.
+
+    You can read more about streams here:
+    https://valkey.io/docs/latest/develop/data-types/streams
+
+    This broker supports acknowledgment of messages.
+    """
+
+    def __init__(
+        self,
+        url: str,
+        queue_name: str = "taskiq",
+        max_connection_pool_size: int = 2**31,
+        consumer_group_name: str = "taskiq",
+        consumer_name: Optional[str] = None,
+        consumer_id: str = "$",
+        mkstream: bool = True,
+        xread_block: int = 10000,
+        additional_streams: Optional[Dict[str, str]] = None,
+        **connection_kwargs: Any,
+    ) -> None:
+        """
+        Constructs a new broker that uses streams.
+
+        :param url: url to valkey.
+        :param queue_name: name for a key with stream in valkey.
+        :param max_connection_pool_size: maximum number of connections in pool.
+            Each worker opens its own connection. Therefore this value has to be
+            at least number of workers + 1.
+        :param consumer_group_name: name for a consumer group.
+            Valkey will keep track of acked messages for this group.
+        :param consumer_name: name for a consumer. By default it is a random uuid.
+        :param consumer_id: id for a consumer. ID of a message to start reading from.
+            $ means start from the latest message.
+        :param mkstream: create stream if it does not exist.
+        :param xread_block: block time in ms for xreadgroup.
+            Better to set it to a bigger value, to avoid unnecessary calls.
+        :param additional_streams: additional streams to read from.
+            Each key is a stream name, value is a consumer id.
+        """
+        super().__init__(
+            url,
+            queue_name=queue_name,
+            max_connection_pool_size=max_connection_pool_size,
+            **connection_kwargs,
+        )
+        self.consumer_group_name = consumer_group_name
+        self.consumer_name = consumer_name or str(uuid.uuid4())
+        self.consumer_id = consumer_id
+        self.mkstream = mkstream
+        self.block = xread_block
+        self.additional_streams = additional_streams or {}
+
+    async def _declare_consumer_group(self) -> None:
+        streams = {self.queue_name, *self.additional_streams.keys()}
+        async with self.valkey as valkey_conn:
+            for stream_name in streams:
+                try:
+                    await valkey_conn.xgroup_create(
+                        stream_name,
+                        self.consumer_group_name,
+                        id=self.consumer_id,
+                        mkstream=self.mkstream,
+                    )
+                except ResponseError as err:
+                    logger.debug(err)
+
+    async def startup(self) -> None:
+        """Declare consumer group on startup."""
+        await super().startup()
+        await self._declare_consumer_group()
+
+    async def kick(self, message: BrokerMessage) -> None:
+        """
+        Put a message in a list.
+
+        This method appends a message to the list of all messages.
+
+        :param message: message to append.
+        """
+        await self.valkey.xadd(self.queue_name, {b"data": message.message})
+
+    def _ack_generator(self, id: str) -> Callable[[], Awaitable[None]]:
+        async def _ack() -> None:
+            await self.valkey.xack(
+                self.queue_name,
+                self.consumer_group_name,
+                id,
+            )
+
+        return _ack
+
+    async def listen(self) -> AsyncGenerator[AckableMessage, None]:
+        """Listen to the stream for new messages."""
+        while True:
+            fetched = await self.valkey.xreadgroup(
+                self.consumer_group_name,
+                self.consumer_name,
+                {
+                    self.queue_name: ">",
+                    **self.additional_streams,  # type: ignore
+                },
+                block=self.block,
+                noack=False,
+            )
+            for _, msg_list in fetched:
+                for msg_id, msg in msg_list:
+                    logger.debug("Received message: %s", msg)
+                    yield AckableMessage(
+                        data=msg[b"data"],
+                        ack=self._ack_generator(msg_id),
+                    )
